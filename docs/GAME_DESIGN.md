@@ -1,9 +1,9 @@
 # Poker Racer - Game Design
 
 A browser-based 3D first-person arcade racing prototype inspired by Half Grip. You steer a right-hand-drive car
-by grabbing the steering wheel with the mouse. On the center console (where the radio would be) sits a small card
+with the keyboard (or on-screen buttons on touch devices). On the center console (where the radio would be) sits a small card
 table with a hand of poker cards. You play poker hands for rewards (money, nitro, ...) while driving, so you have to
-juggle the wheel and the cards with ONE mouse. That tension is the core of the game.
+glance down at the cards without leaving the road. That tension is the core of the game.
 
 ## 1. Scope of this version
 
@@ -16,7 +16,7 @@ be added later (car stats in a `CarStats` object, rewards in a config table, AI 
 - Vite + TypeScript + Three.js. No external assets: all 3D is procedural geometry (boxes, cylinders, extruded
   strips, canvas-generated textures). Sounds are synthesized with WebAudio.
 - No physics engine: a custom, deterministic, tunable arcade car model.
-- Cards are a DOM/CSS overlay glued to the 3D console (crisp text, easy drag and drop); the steering wheel is a 3D mesh.
+- Cards are a DOM/CSS overlay glued to the 3D console (crisp text, easy tap handling); the steering wheel is a 3D mesh.
 - Target 60 fps on a normal laptop: pixel ratio capped at 2, fog, gradient sky, one shadow-casting sun with a
   player-following shadow frustum, instanced low-poly scenery, a low-res (30 Hz) rear-view mirror pass.
 
@@ -45,17 +45,26 @@ be added later (car stats in a `CarStats` object, rewards in a config table, AI 
 | `W` | throttle |
 | `S` | brake; reverse when stopped |
 | `Space` | handbrake (rear grip drops -> drifts) |
-| Mouse (hold on wheel) | grab the wheel, rotate by moving around the wheel center |
-| Release mouse / leave window | let go; the wheel springs back to center |
+| `A` / `D` (or arrow keys) | steer left / right |
+| Touch: left / right buttons, GAS, BRAKE | same as the keys (landscape only); small pause and reset buttons in the middle |
 | `R` | reset car onto the track (3 s cooldown) |
 | `Esc` | pause |
 | `M` | mute |
 
-Steering wheel: press and hold on the wheel to grab it. While held, the wheel angle accumulates the pointer's angle
-deltas around the wheel's projected screen-space center, clamped to +/-270 degrees. Releasing (mouse up, pointer leaves
-the window, window blur, tab hidden) lets go and a damped spring returns the wheel to center, so the car straightens.
+Steering wheel (`car/SteerInput.ts`): while a steer key / touch button is held, the 3D wheel turns towards full lock
+(+/-270 degrees) at `WHEEL.turnRateDeg`, faster when counter-steering. Letting go (or pausing / losing focus) hands
+control to a damped spring that returns the wheel to center, so the car straightens.
 Steering input = wheelAngle / maxWheelAngle (with a response curve), then speed-sensitive steering in the car model.
-Because the mouse is shared, picking cards means letting go of the wheel. This is intentional.
+The mouse is only used for the cards, so looking down at the table is a risk because you are still steering by key.
+
+Touch layout (`ui/TouchControls.ts`): active on coarse-pointer devices (`?touch=1` forces it on desktop). Steer buttons
+bottom-left, BRAKE + GAS bottom-right, pause / reset bottom-center. Entering a race requests fullscreen + landscape lock
+(best effort). In portrait a full-screen "rotate your device" overlay is shown and the race is paused.
+
+PWA: `public/manifest.webmanifest` + `sw.js` (generated at build time by `vite.config.ts` from
+`scripts/sw.template.js`, precaches the bundle). `src/pwa/pwa.ts` registers the worker in production builds and powers
+the menu's "Install app" button (`beforeinstallprompt`; on iOS it shows Add-to-Home-Screen instructions; hidden when
+already installed).
 
 ## 6. Car physics (arcade, Half Grip-ish)
 
@@ -98,9 +107,8 @@ through the `RewardTarget` interface, so a card-using brain can be added later. 
   above the table while selecting.
 - **Playing**: PLAY button. The best poker hand among the selected cards is evaluated (ace high or low in straights),
   the reward is applied, and ALL played cards are consumed.
-- **Discarding**: drag a card and drop it above the dashboard line (the window zone, highlighted while dragging). The
-  card flies out with a throw/shrink animation and is gone for this race. Dropping it on the table returns it. A click
-  without movement = select, a drag beyond a 6 px threshold = drag.
+- **Discarding**: double-click (double-tap) a card. It flies out of the window with a spin/shrink animation and is
+  gone for this race. A single click / tap toggles selection (two taps on the same card within 320 ms = double).
 - Discarded, played and knocked-off cards never come back during that race.
 - **Crash penalty**: on every hard crash, one random card is knocked off the table (flies/falls off with an effect). If the
   hand is empty, one card is removed from the draw pile with a HUD flash. This is a single function:
@@ -140,7 +148,7 @@ Money is persisted in localStorage through the `SaveData` module. It is only dis
 - Shield: no card drop and no speed loss on wall hits (the car still bounces off); car-to-car hits push the other car.
 - Hard-crash threshold: 10.5 m/s closing speed; 0.8 s cooldown between card penalties.
 - Nitro timer is capped at 20 s; shield at 30 s.
-- Throwing a card out of the window on a "drag" also works while driving; dropping outside the window zone returns it.
+- Throwing a card out of the window (double-click) also works while driving.
 - A manual reset key (`R`) and a "stuck" hint were added as quality-of-life features.
 - Wheel response uses an exponent (1.25) for finer control near center. The wheel spring damping ratio is 0.8.
 - The rear-view mirror is a real low-res render (30 Hz); disable with `MIRROR.enabled = false` if performance suffers.

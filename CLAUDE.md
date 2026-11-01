@@ -5,9 +5,9 @@
 - **Everything inside the project is English**: code, comments, identifiers, file names, UI text, docs, commit messages.
 
 ## What this is
-Browser 3D first-person arcade racer (right-hand drive, Half Grip inspired). You steer by grabbing a 3D steering wheel
-with the mouse; a DOM card table on the center console lets you play poker hands for rewards while driving (one mouse =
-wheel OR cards). Full spec and decisions: `docs/GAME_DESIGN.md` (keep it updated when behavior changes).
+Browser 3D first-person arcade racer (right-hand drive, Half Grip inspired). You steer with A/D (or on-screen buttons on
+touch devices) and drive a 3D steering wheel; a DOM card table on the center console lets you play poker hands for
+rewards with the mouse / finger while driving. Installable as a PWA. Full spec and decisions: `docs/GAME_DESIGN.md` (keep it updated when behavior changes).
 
 ## Stack
 - Vite + TypeScript (strict) + Three.js. No external assets: procedural geometry, canvas textures, WebAudio synthesis.
@@ -19,16 +19,19 @@ wheel OR cards). Full spec and decisions: `docs/GAME_DESIGN.md` (keep it updated
 - `config/` - ALL tunables (never hard-code numbers elsewhere):
   `carStats.ts` (CarStats + PHYSICS), `gameConfig.ts` (race/AI/camera/wheel/payouts/effects/mirror),
   `cardConfig.ts` (DECK_SIZE, hand size, boxes), `rewards.ts` (hand reward table), `trackConfig.ts`, `cabinConfig.ts`.
-- `core/` - math, seeded RNG, event emitter, SaveData (localStorage), keyboard, WebAudio engine.
+- `core/` - math, seeded RNG, event emitter, SaveData (localStorage), keyboard, device detection (touch / standalone), WebAudio engine.
 - `track/Track.ts` - centerline data (samples, curvature, locate/pointAt) + seeded generator.
-- `car/` - `Car.ts` (physics step), `collisions.ts` (walls, car-car), `AIDriver.ts`, `WheelInput.ts` (mouse wheel).
+- `car/` - `Car.ts` (physics step), `collisions.ts` (walls, car-car), `AIDriver.ts`, `SteerInput.ts` (keyboard/touch steering wheel).
 - `cards/` - `CardSystem` (pure logic), `Deck`, `PokerEval`, `crashPenalty.ts` (single function), `applyReward.ts`
   (`RewardTarget` interface; rewards are data in `config/rewards.ts`).
 - `scene/` - `World` (sky, fog, lights, track, scenery), `TrackMesh`, `Scenery`, `Cabin`, `CameraRig`, `CarMesh`,
   `Sky`, `textures` (canvas textures), `dispose`.
 - `fx/` - `Particles`, `OilSlicks`, `CardBoxes`.
-- `ui/` - DOM UI: `HUD`, `screens` (menu/pause/finish), `CardTableUI` (drag & drop, animations), `dom` helpers.
+- `ui/` - DOM UI: `HUD`, `screens` (menu/pause/finish), `CardTableUI` (tap select, double-tap discard, animations),
+  `TouchControls` (on-screen drive buttons), `dom` helpers.
   Styles in `src/style.css`.
+- `pwa/` - `pwa.ts` (service worker registration + install prompt). Manifest/icons in `public/`, SW template in
+  `scripts/sw.template.js` (built into `sw.js` by the plugin in `vite.config.ts`).
 - `game/` - `Game` (menu <-> race state machine, renderer, main loop), `Race` (one race session, owns the fixed-step
   simulation and wires everything), `Showcase` (menu background).
 
@@ -49,4 +52,4 @@ wheel OR cards). Full spec and decisions: `docs/GAME_DESIGN.md` (keep it updated
   because `Car.ts`, `Track.ts`, `PokerEval.ts` have no DOM dependency.
 
 ## Not built yet (planned)
-Garage, car upgrades, shop, roguelike layers, AI card use, music, gamepad/touch support.
+Garage, car upgrades, shop, roguelike layers, AI card use, music, gamepad support.

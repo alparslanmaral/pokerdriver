@@ -1,4 +1,6 @@
 import { PAYOUT_DEFAULT, PAYOUTS } from '../config/gameConfig';
+import { isTouchDevice } from '../core/device';
+import { pwa, InstallMode } from '../pwa/pwa';
 import { el, formatMoney, ordinal } from './dom';
 
 export function payoutFor(position: number): number {
@@ -9,6 +11,8 @@ export function payoutFor(position: number): number {
 export class MenuScreen {
   readonly root: HTMLElement;
   private moneyEl: HTMLElement;
+  private installBtn: HTMLButtonElement;
+  private installNote: HTMLElement;
 
   constructor(parent: HTMLElement, onStart: () => void) {
     this.root = el('div', 'screen menu', parent);
@@ -16,7 +20,7 @@ export class MenuScreen {
     const suits = el('div', 'menu-suits', panel);
     suits.innerHTML = '<span>♠</span><span class="red">♥</span><span class="red">♦</span><span>♣</span>';
     el('h1', 'title', panel, 'POKER RACER');
-    el('p', 'tagline', panel, 'Steer with one hand. Play poker with the other. You only have one mouse.');
+    el('p', 'tagline', panel, isTouchDevice() ? 'Steer with your left thumb. Play poker with your right. Keep your eyes on the road.' : 'Steer with the keys. Play poker with the mouse. Keep your eyes on the road.');
 
     const moneyRow = el('div', 'menu-money', panel);
     el('span', 'label', moneyRow, 'BANK');
@@ -25,14 +29,41 @@ export class MenuScreen {
     const start = el('button', 'btn primary big', panel, 'Start Race');
     start.addEventListener('click', onStart);
 
+    this.installBtn = el('button', 'btn install', panel);
+    this.installBtn.addEventListener('click', () => this.onInstallClick());
+    this.installNote = el('div', 'install-note', panel);
+    this.installNote.style.display = 'none';
+    this.updateInstall(pwa.mode);
+    pwa.events.on('changed', (mode) => this.updateInstall(mode));
+
     const help = el('div', 'help', panel);
-    help.innerHTML = `
+    const touch = isTouchDevice();
+    help.innerHTML = touch
+      ? `
+      <div class="help-col">
+        <h3>Driving</h3>
+        <ul>
+          <li>Hold <b>&#9664;</b> / <b>&#9654;</b> (left thumb) to steer; let go and the wheel centers itself.</li>
+          <li>Hold <b>GAS</b> to accelerate and <b>BRAKE</b> to slow down / reverse (right thumb).</li>
+          <li>&#10074;&#10074; pauses, &#8634; puts the car back on the track.</li>
+        </ul>
+      </div>
+      <div class="help-col">
+        <h3>Cards</h3>
+        <ul>
+          <li>Drive through floating card boxes to draw 2 cards.</li>
+          <li>Tap cards to select (max 5), then press <b>PLAY</b>.</li>
+          <li><b>Double-tap</b> a card to throw it out of the window.</li>
+          <li>Hard crashes knock a card off your table!</li>
+        </ul>
+      </div>`
+      : `
       <div class="help-col">
         <h3>Driving</h3>
         <ul>
           <li><kbd>W</kbd> throttle &nbsp; <kbd>S</kbd> brake / reverse</li>
+          <li><kbd>A</kbd> <kbd>D</kbd> steer left / right (arrow keys work too)</li>
           <li><kbd>Space</kbd> handbrake (drift)</li>
-          <li><b>Mouse:</b> hold the left button on the steering wheel and move around it. Let go to center it.</li>
           <li><kbd>R</kbd> reset car &nbsp; <kbd>Esc</kbd> pause &nbsp; <kbd>M</kbd> mute</li>
         </ul>
       </div>
@@ -41,11 +72,27 @@ export class MenuScreen {
         <ul>
           <li>Drive through floating card boxes to draw 2 cards.</li>
           <li>Click cards to select (max 5), then press <b>PLAY</b>.</li>
-          <li>Drag a card out of the window to throw it away.</li>
+          <li><b>Double-click</b> a card to throw it out of the window.</li>
           <li>Hard crashes knock a card off your table!</li>
-          <li>Letting go of the wheel to use cards is a risk.</li>
+          <li>Looking at the cards instead of the road is a risk.</li>
         </ul>
       </div>`;
+  }
+
+  private updateInstall(mode: InstallMode): void {
+    this.installBtn.style.display = mode === 'hidden' ? 'none' : '';
+    this.installBtn.textContent = mode === 'ios' ? 'Add to Home Screen' : 'Install app';
+    if (mode === 'hidden') this.installNote.style.display = 'none';
+  }
+
+  private async onInstallClick(): Promise<void> {
+    if (pwa.mode === 'prompt') {
+      await pwa.promptInstall();
+      return;
+    }
+    // iOS Safari: no install API, show how to do it by hand
+    this.installNote.innerHTML = 'Tap the <b>Share</b> button in Safari, then <b>Add to Home Screen</b>.';
+    this.installNote.style.display = '';
   }
 
   setMoney(amount: number): void {

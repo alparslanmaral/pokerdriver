@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GAME } from '../config/gameConfig';
 import { AudioEngine } from '../core/audio';
+import { enterImmersiveMode, isTouchDevice } from '../core/device';
 import { SaveData } from '../core/save';
 import { setMaxAnisotropy } from '../scene/textures';
 import { MenuScreen } from '../ui/screens';
@@ -70,6 +71,7 @@ export class Game {
   startRace(): void {
     this.audio.init();
     this.audio.uiClick();
+    if (isTouchDevice()) void enterImmersiveMode();
     this.menu.show(false);
     this.showcase?.dispose();
     this.showcase = null;

@@ -3,12 +3,12 @@ import { HAND_SIZE_MAX, MAX_SELECTED } from '../config/cardConfig';
 import { describeReward, HAND_REWARDS } from '../config/rewards';
 import { CardSystem } from '../cards/CardSystem';
 import { Card, SUIT_SYMBOL, isRed, rankLabel } from '../cards/types';
-import { clamp } from '../core/math';
 import { el } from './dom';
 
 const CARD_W = 64;
 const CARD_H = 92;
-const DRAG_THRESHOLD = 6;
+/** Max gap (ms) between two taps on the same card to count as a double tap (= throw it out of the window). */
+const DOUBLE_TAP_MS = 320;
 
 interface Pose {
   x: number;
@@ -20,23 +20,8 @@ interface Pose {
 export interface CardTableHooks {
   /** PLAY button pressed. */
   onPlay(): void;
-  /** Client-space Y of the dashboard line: dropping above it throws the card out of the window. */
-  getDropLineY(): number;
   onSelectSound(on: boolean): void;
   onDiscardSound(): void;
-}
-
-interface DragState {
-  id: number;
-  node: HTMLElement;
-  card: Card;
-  pointerId: number;
-  startX: number;
-  startY: number;
-  dragging: boolean;
-  clone: HTMLElement | null;
-  lastX: number;
-  tilt: number;
 }
 
 function poseTransform(p: Pose): string {
@@ -52,12 +37,11 @@ export function createCardElement(card: Card): HTMLElement {
 }
 
 /**
- * The DOM card table glued to the 3D center console. Renders the hand, handles click-to-select,
- * drag-to-discard (window zone), the PLAY button and all card fly animations.
+ * The DOM card table glued to the 3D center console. Renders the hand, handles tap-to-select,
+ * double-tap-to-discard (the card is thrown out of the window), the PLAY button and all card fly animations.
  */
 export class CardTableUI {
   readonly root: HTMLElement;
-  private readonly zone: HTMLElement;
   private readonly nameEl: HTMLElement;
   private readonly rewardEl: HTMLElement;
   private readonly deckEl: HTMLElement;
@@ -68,7 +52,7 @@ export class CardTableUI {
   private readonly nodes = new Map<number, HTMLElement>();
   private readonly pendingEntries = new Map<number, { x: number; y: number; delay: number }>();
   private readonly unsubs: Array<() => void> = [];
-  private drag: DragState | null = null;
+  private lastTap = { id: -1, time: 0 };
   private scale = 1;
   private enabled = false;
   private drawOrigin: { x: number; y: number } | null = null;
@@ -78,9 +62,6 @@ export class CardTableUI {
     private readonly cards: CardSystem,
     private readonly hooks: CardTableHooks,
   ) {
-    this.zone = el('div', 'dropzone', parent);
-    el('div', 'dropzone-label', this.zone, 'DROP HERE TO THROW THE CARD OUT OF THE WINDOW');
-
     this.root = el('div', 'ct', parent);
     this.root.style.width = `${TABLE_DOM.width}px`;
     this.root.style.height = `${TABLE_DOM.height}px`;
@@ -124,7 +105,7 @@ export class CardTableUI {
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     this.root.classList.toggle('disabled', !enabled);
-    if (!enabled) this.cancelDrag();
+    if (!enabled) this.lastTap.id = -1;
     this.updatePlayButton();
   }
 
@@ -140,15 +121,9 @@ export class CardTableUI {
     this.flash.className = `ct-flash on ${kind}`;
   }
 
-  get busyDragging(): boolean {
-    return this.drag?.dragging ?? false;
-  }
-
   dispose(): void {
     for (const u of this.unsubs) u();
-    this.cancelDrag();
     this.root.remove();
-    this.zone.remove();
     document.querySelectorAll('.card.fly').forEach((n) => n.remove());
   }
 
@@ -163,7 +138,6 @@ export class CardTableUI {
         this.nodes.delete(id);
       }
     }
-    if (this.drag && !ids.has(this.drag.id)) this.cancelDrag();
 
     const n = hand.length;
     const feltW = TABLE_DOM.width - 30;
@@ -215,7 +189,7 @@ export class CardTableUI {
     if (sel.length === 0) {
       this.nameEl.textContent = 'Select 1-5 cards';
       this.nameEl.className = 'ct-name idle';
-      this.rewardEl.textContent = hand.length === 0 ? 'Hand empty: find card boxes' : 'then press PLAY';
+      this.rewardEl.textContent = hand.length === 0 ? 'Hand empty: find card boxes' : 'then PLAY \u00b7 double-tap = throw out';
     } else if (result) {
       this.nameEl.textContent = HAND_REWARDS[result.kind].label;
       this.nameEl.className = `ct-name kind-${result.kind}`;
@@ -234,111 +208,45 @@ export class CardTableUI {
     const node = createCardElement(card);
     node.dataset.id = String(card.id);
     node.addEventListener('pointerdown', (e) => this.onPointerDown(e, card, node));
-    node.addEventListener('pointermove', (e) => this.onPointerMove(e));
-    node.addEventListener('pointerup', (e) => this.onPointerUp(e));
-    node.addEventListener('pointercancel', () => this.cancelDrag());
     return node;
   }
 
-  // ------------------------------------------------------------------ pointer / drag
+  // ------------------------------------------------------------------ pointer: tap = select, double tap = discard
 
   private onPointerDown(e: PointerEvent, card: Card, node: HTMLElement): void {
-    if (!this.enabled || e.button !== 0 || this.drag) return;
+    if (!this.enabled || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    node.setPointerCapture(e.pointerId);
-    this.drag = {
-      id: card.id,
-      node,
-      card,
-      pointerId: e.pointerId,
-      startX: e.clientX,
-      startY: e.clientY,
-      dragging: false,
-      clone: null,
-      lastX: e.clientX,
-      tilt: 0,
-    };
-  }
 
-  private onPointerMove(e: PointerEvent): void {
-    const d = this.drag;
-    if (!d || e.pointerId !== d.pointerId) return;
-    if (!d.dragging) {
-      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_THRESHOLD) return;
-      d.dragging = true;
-      d.node.classList.add('ghost');
-      d.clone = createCardElement(d.card);
-      d.clone.classList.add('fly', 'dragging');
-      document.body.appendChild(d.clone);
-      this.zone.classList.add('active');
-    }
-    d.tilt = clamp((e.clientX - d.lastX) * 1.2 + d.tilt * 0.6, -22, 22);
-    d.lastX = e.clientX;
-    if (d.clone) d.clone.style.transform = poseTransform({ x: e.clientX, y: e.clientY, scale: this.scale * 1.15, rot: d.tilt });
-    const line = this.hooks.getDropLineY();
-    this.zone.style.height = `${line}px`;
-    this.zone.classList.toggle('hot', e.clientY < line);
-  }
-
-  private onPointerUp(e: PointerEvent): void {
-    const d = this.drag;
-    if (!d || e.pointerId !== d.pointerId) return;
-    try {
-      d.node.releasePointerCapture(e.pointerId);
-    } catch {
-      /* already released */
-    }
-    if (!d.dragging) {
-      // plain click = toggle selection
-      const wasSelected = this.cards.isSelected(d.id);
-      const now = this.cards.toggleSelect(d.id);
-      if (!wasSelected && !now) {
-        d.node.classList.remove('deny');
-        void d.node.offsetWidth;
-        d.node.classList.add('deny');
-      } else {
-        this.hooks.onSelectSound(now);
-      }
-      this.drag = null;
+    const now = performance.now();
+    const isDouble = this.lastTap.id === card.id && now - this.lastTap.time < DOUBLE_TAP_MS;
+    if (isDouble) {
+      this.lastTap.id = -1;
+      this.throwOut(card, node);
       return;
     }
+    this.lastTap = { id: card.id, time: now };
 
-    const line = this.hooks.getDropLineY();
-    const inWindow = e.clientY < line;
-    const clone = d.clone;
-    const card = d.card;
-    this.endDragVisuals();
-    this.drag = null;
-    if (clone) clone.remove();
-
-    if (inWindow) {
-      this.hooks.onDiscardSound();
-      const from: Pose = { x: e.clientX, y: e.clientY, scale: this.scale * 1.15, rot: d.tilt };
-      const side = e.clientX > window.innerWidth / 2 ? 1 : -1;
-      const to: Pose = { x: e.clientX + side * 160, y: -140, scale: this.scale * 0.2, rot: side * 420 };
-      void this.flyClone(card, from, to, { duration: 650, easing: 'cubic-bezier(.4,0,.9,.6)', fadeOut: true });
-      this.cards.discard(card.id); // emits changed -> removes the node
+    const wasSelected = this.cards.isSelected(card.id);
+    const nowSelected = this.cards.toggleSelect(card.id);
+    if (!wasSelected && !nowSelected) {
+      node.classList.remove('deny');
+      void node.offsetWidth;
+      node.classList.add('deny');
     } else {
-      // dropped back on the table: fly home
-      const r = d.node.getBoundingClientRect();
-      const from: Pose = { x: e.clientX, y: e.clientY, scale: this.scale * 1.15, rot: d.tilt };
-      const to: Pose = { x: r.left + r.width / 2, y: r.top + r.height / 2, scale: this.scale, rot: 0 };
-      void this.flyClone(card, from, to, { duration: 220, easing: 'ease-out' }).then(() => d.node.classList.remove('ghost'));
+      this.hooks.onSelectSound(nowSelected);
     }
   }
 
-  private endDragVisuals(): void {
-    this.zone.classList.remove('active', 'hot');
-  }
-
-  private cancelDrag(): void {
-    const d = this.drag;
-    if (!d) return;
-    d.clone?.remove();
-    d.node.classList.remove('ghost');
-    this.endDragVisuals();
-    this.drag = null;
+  /** Discard a card: it flies up and out of the car window, spinning and shrinking. */
+  private throwOut(card: Card, node: HTMLElement): void {
+    const r = node.getBoundingClientRect();
+    const from: Pose = { x: r.left + r.width / 2, y: r.top + r.height / 2, scale: this.scale, rot: 0 };
+    const side = from.x > window.innerWidth / 2 ? 1 : -1;
+    const to: Pose = { x: from.x + side * 170, y: -160, scale: this.scale * 0.2, rot: side * 420 };
+    this.hooks.onDiscardSound();
+    void this.flyClone(card, from, to, { duration: 650, easing: 'cubic-bezier(.4,0,.9,.6)', fadeOut: true });
+    this.cards.discard(card.id); // emits changed -> removes the node
   }
 
   // ------------------------------------------------------------------ card events -> animations

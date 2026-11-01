@@ -808,7 +808,7 @@ kbd {
   background: linear-gradient(160deg, #ffffff, #e9edf2);
   border: 1px solid #aeb7c2;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
-  cursor: grab;
+  cursor: pointer;
   transition: left 0.25s cubic-bezier(0.3, 1, 0.4, 1), transform 0.2s cubic-bezier(0.3, 1, 0.4, 1), box-shadow 0.15s;
   font-family: Georgia, 'Times New Roman', serif;
   touch-action: none;
@@ -873,10 +873,6 @@ kbd {
   background: var(--gold);
 }
 
-.card.ghost {
-  opacity: 0.22;
-}
-
 .card.deny {
   animation: deny 0.3s;
 }
@@ -901,51 +897,8 @@ kbd {
   will-change: transform;
 }
 
-.card.fly.dragging {
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.55);
-}
-
 .card.fly.glow {
   box-shadow: 0 0 30px 8px rgba(255, 211, 77, 0.9);
-}
-
-.dropzone {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 50%;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
-  border-bottom: 3px dashed rgba(255, 255, 255, 0.55);
-  background: rgba(77, 210, 255, 0.07);
-  z-index: 25;
-}
-
-.dropzone.active {
-  opacity: 1;
-}
-
-.dropzone.hot {
-  background: rgba(77, 210, 255, 0.24);
-  border-bottom-color: var(--gold);
-}
-
-.dropzone-label {
-  margin-top: 70px;
-  font-weight: 900;
-  letter-spacing: 3px;
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.85);
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
-}
-
-.dropzone.hot .dropzone-label {
-  color: var(--gold);
 }
 
 @media (max-width: 900px) {
@@ -959,5 +912,263 @@ kbd {
   .minimap {
     width: 110px;
     height: 110px;
+  }
+}
+
+/* ------------------------------------------------------------------ install button */
+
+.btn.install {
+  display: block;
+  margin: -8px auto 18px;
+  padding: 8px 22px;
+  font-size: 14px;
+}
+
+.install-note {
+  margin: -8px auto 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ touch controls */
+
+.touch {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+}
+
+.touch.off {
+  display: none;
+}
+
+.touch-group {
+  position: absolute;
+  bottom: calc(8px + var(--safe-b));
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.touch-steer {
+  left: calc(12px + var(--safe-l));
+}
+
+.touch-pedals {
+  right: calc(12px + var(--safe-r));
+}
+
+.touch-pad {
+  pointer-events: auto;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(60px, 16vh, 100px);
+  height: clamp(60px, 16vh, 100px);
+  border-radius: 20px;
+  background: rgba(12, 16, 24, 0.38);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: clamp(26px, 7vh, 38px);
+  font-weight: 900;
+  letter-spacing: 1px;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  transition: background 0.06s, transform 0.06s;
+}
+
+.touch-pad.down {
+  background: rgba(255, 255, 255, 0.34);
+  transform: scale(0.94);
+}
+
+.touch-pad.pad-gas {
+  width: clamp(72px, 21vh, 124px);
+  height: clamp(96px, 28vh, 164px);
+  font-size: clamp(16px, 4.6vh, 22px);
+  border-color: rgba(61, 220, 151, 0.7);
+  color: var(--green);
+}
+
+.touch-pad.pad-gas.down {
+  background: rgba(61, 220, 151, 0.35);
+}
+
+.touch-pad.pad-brake {
+  width: clamp(60px, 16vh, 100px);
+  height: clamp(60px, 16vh, 100px);
+  font-size: clamp(12px, 3.2vh, 17px);
+  border-color: rgba(230, 57, 70, 0.7);
+  color: #ff7b86;
+}
+
+.touch-pad.pad-brake.down {
+  background: rgba(230, 57, 70, 0.35);
+}
+
+.touch-small {
+  position: absolute;
+  left: 50%;
+  bottom: calc(10px + var(--safe-b));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+}
+
+.touch-btn {
+  pointer-events: auto;
+  touch-action: manipulation;
+  width: 44px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(12, 16, 24, 0.5);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 15px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ------------------------------------------------------------------ rotate-device overlay */
+
+#rotate {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--bg);
+  text-align: center;
+  padding: 24px;
+}
+
+.rotate-phone {
+  width: 54px;
+  height: 92px;
+  border: 4px solid var(--gold);
+  border-radius: 10px;
+  animation: rotate-hint 2.4s ease-in-out infinite;
+}
+
+.rotate-text {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--gold);
+}
+
+.rotate-sub {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+@keyframes rotate-hint {
+  0%,
+  20% {
+    transform: rotate(0deg);
+  }
+  60%,
+  100% {
+    transform: rotate(-90deg);
+  }
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  #rotate {
+    display: flex;
+  }
+}
+
+/* ------------------------------------------------------------------ small landscape screens (phones) */
+
+@media (pointer: coarse) {
+  html,
+  body {
+    overscroll-behavior: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+@media (max-height: 520px) {
+  .screen {
+    align-items: flex-start;
+    overflow-y: auto;
+  }
+  .panel {
+    padding: 14px 20px;
+    margin: auto;
+  }
+  .menu-suits {
+    display: none;
+  }
+  .title {
+    font-size: 34px;
+  }
+  .tagline {
+    margin: 2px 0 8px;
+    font-size: 12px;
+  }
+  .menu-money {
+    margin-bottom: 8px;
+    padding: 4px 12px;
+  }
+  .btn.big {
+    margin-bottom: 10px;
+    padding: 10px 40px;
+    font-size: 18px;
+  }
+  .help {
+    flex-direction: row;
+    gap: 18px;
+    font-size: 12px;
+    padding-top: 8px;
+  }
+  .help ul {
+    margin: 0;
+    padding-left: 16px;
+  }
+}
+
+/* HUD on phones (landscape): smaller, and clear of the thumb buttons */
+@media (max-height: 520px) {
+  .touch-ui .hud-tl {
+    left: calc(14px + env(safe-area-inset-left, 0px));
+    top: 8px;
+  }
+  .touch-ui .hud-pos-n {
+    font-size: 40px;
+  }
+  .touch-ui .hud-lap {
+    font-size: 13px;
+  }
+  .touch-ui .hud-tr {
+    right: calc(14px + env(safe-area-inset-right, 0px));
+    top: 8px;
+    gap: 4px;
+  }
+  .touch-ui .hud-money {
+    font-size: 20px;
+  }
+  .touch-ui .minimap {
+    width: 96px;
+    height: 96px;
+  }
+  .touch-ui .hud-br {
+    right: calc(190px + env(safe-area-inset-right, 0px));
+    bottom: 10px;
+    width: 130px;
+  }
+  .touch-ui .hud-speed-n {
+    font-size: 30px;
+  }
+  .touch-ui .toasts {
+    top: 8%;
   }
 }

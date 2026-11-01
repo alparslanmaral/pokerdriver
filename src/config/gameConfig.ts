@@ -80,8 +80,10 @@ export const WHEEL = {
   springDampingRatio: 0.8,
   /** Extra self-aligning spring per m/s of speed. */
   springSpeedK: 0.6,
-  /** Ignore pointer movement closer than this to the wheel center (px). */
-  deadZonePx: 14,
+  /** How fast the wheel turns towards full lock while a steer key / touch button is held (deg/s). */
+  turnRateDeg: 330,
+  /** Multiplier on the turn rate when steering back against the current wheel angle. */
+  counterSteerBoost: 1.6,
   /** Response curve exponent: steer = sign(x) * |x|^exponent. */
   steerExponent: 1.25,
 } as const;

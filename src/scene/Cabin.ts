@@ -13,15 +13,9 @@ export interface Cabin {
   eye: THREE.Object3D;
   /** Rotating part of the steering wheel (local Z is the wheel axis). */
   wheelSpin: THREE.Object3D;
-  /** Wheel center, used to project the wheel into screen space. */
-  wheelCenter: THREE.Object3D;
-  /** Invisible disc that is ray-tested to grab the wheel. */
-  wheelHit: THREE.Object3D;
   /** Card table anchors (left / right edge midpoints) for projecting the DOM overlay. */
   tableLeftEdge: THREE.Object3D;
   tableRightEdge: THREE.Object3D;
-  /** A point on the dashboard's front edge used to compute the window drop-zone line. */
-  dashEdge: THREE.Object3D;
   updateCluster(speedKmh: number, nitroFrac: number, shield: boolean): void;
   dispose(): void;
 }
@@ -253,12 +247,6 @@ export function buildCabin(mirrorTexture?: THREE.Texture): Cabin {
   column.position.z = -0.17;
   wheelGroup.add(column);
 
-  const wheelHit = new THREE.Mesh(
-    new THREE.CircleGeometry(wc.radius * 1.15, 24),
-    new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }),
-  );
-  wheelGroup.add(wheelHit);
-
   // ---- Card table panel (center console, driver-oriented)
   const T = CABIN.table;
   const tableGroup = new THREE.Group();
@@ -283,10 +271,6 @@ export function buildCabin(mirrorTexture?: THREE.Texture): Cabin {
   const pedestal = box(0.5, 0.5, 0.4, dark, T.x, 0.5, T.z - 0.12);
   root.add(pedestal);
 
-  const dashEdge = new THREE.Object3D();
-  dashEdge.position.set(0, D.topY, D.frontZ);
-  root.add(dashEdge);
-
   const eye = new THREE.Object3D();
   eye.position.set(CABIN.eye.x, CABIN.eye.y, CABIN.eye.z);
   root.add(eye);
@@ -295,11 +279,8 @@ export function buildCabin(mirrorTexture?: THREE.Texture): Cabin {
     root,
     eye,
     wheelSpin,
-    wheelCenter: wheelGroup,
-    wheelHit,
     tableLeftEdge,
     tableRightEdge,
-    dashEdge,
     updateCluster,
     dispose() {
       clusterTex.dispose();

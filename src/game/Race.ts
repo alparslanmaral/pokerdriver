@@ -11,7 +11,7 @@ import {
   stepCar,
 } from '../car/Car';
 import { ImpactInfo, resolveCarPair, resolveWall } from '../car/collisions';
-import { WheelInput } from '../car/WheelInput';
+import { SteerInput } from '../car/SteerInput';
 import { applyHandReward, RewardTarget } from '../cards/applyReward';
 import { CardSystem } from '../cards/CardSystem';
 import { applyCrashPenalty } from '../cards/crashPenalty';
@@ -21,6 +21,7 @@ import { TABLE_DOM } from '../config/cabinConfig';
 import { HAND_ORDER, HAND_REWARDS, describeReward } from '../config/rewards';
 import { AI_CONFIG, EFFECTS, GAME, MIRROR, PLAYER_COLOR, RIVALS } from '../config/gameConfig';
 import { AudioEngine } from '../core/audio';
+import { isTouchDevice } from '../core/device';
 import { Keyboard } from '../core/input';
 import { clamp, wrapAngle } from '../core/math';
 import { Rng, randomSeed } from '../core/rng';
@@ -34,6 +35,7 @@ import { CameraRig } from '../scene/CameraRig';
 import { World } from '../scene/World';
 import { CardTableUI } from '../ui/CardTableUI';
 import { HUD, MinimapDot, NameTag } from '../ui/HUD';
+import { TouchControls } from '../ui/TouchControls';
 import { FinishRow, FinishScreen, PauseOverlay, payoutFor } from '../ui/screens';
 import { Track, TrackLocation, newLocation, newTrackPoint } from '../track/Track';
 
@@ -87,7 +89,8 @@ export class Race implements RewardTarget {
   private readonly mirrorTarget: THREE.WebGLRenderTarget;
   private readonly mirrorCamera: THREE.PerspectiveCamera;
   private frameCounter = 0;
-  private readonly wheel: WheelInput;
+  private readonly wheel = new SteerInput();
+  private readonly touch: TouchControls | null;
   private readonly hud: HUD;
   private readonly cardUI: CardTableUI;
   private readonly pauseUI: PauseOverlay;
@@ -121,7 +124,6 @@ export class Race implements RewardTarget {
 
   private readonly tmpV = new THREE.Vector3();
   private readonly proj = { x: 0, y: 0 };
-  private dropLineY = 0;
   private readonly pt = newTrackPoint();
   private readonly onResize = (): void => this.resize();
   private readonly onVisibility = (): void => {
@@ -151,10 +153,6 @@ export class Race implements RewardTarget {
     this.cameraRig = new CameraRig(window.innerWidth / window.innerHeight);
     this.cabin.root.add(this.cameraRig.camera);
 
-    // ---- Wheel input
-    this.wheel = new WheelInput(deps.canvas, this.cameraRig.camera, this.cabin.wheelHit, this.cabin.wheelCenter);
-    this.wheel.attach();
-
     // ---- Cards
     this.cards = new CardSystem(this.rng);
     this.boxes = new CardBoxes(this.track, this.rng);
@@ -165,7 +163,6 @@ export class Race implements RewardTarget {
     this.hud.setTrack(this.track);
     this.cardUI = new CardTableUI(deps.uiRoot, this.cards, {
       onPlay: () => this.playSelectedCards(),
-      getDropLineY: () => this.dropLineY,
       onSelectSound: (on) => deps.audio.cardSelect(on),
       onDiscardSound: () => deps.audio.discard(),
     });
@@ -175,6 +172,14 @@ export class Race implements RewardTarget {
       () => this.exit('menu'),
     );
     this.finishUI = new FinishScreen(deps.uiRoot);
+    this.touch = isTouchDevice()
+      ? new TouchControls(deps.uiRoot, {
+          onPause: () => {
+            if (this.phase !== 'done') this.setPaused(!this.paused);
+          },
+          onReset: () => this.resetPlayer(),
+        })
+      : null;
 
     // ---- Racers
     this.player = this.createRacers();
@@ -277,7 +282,7 @@ export class Race implements RewardTarget {
     this.paused = p;
     this.pauseUI.show(p);
     this.wheel.release();
-    this.wheel.enabled = !p && this.phase !== 'done';
+    this.touch?.setEnabled(!p && this.phase !== 'done');
     this.cardUI.setEnabled(!p && this.phase === 'racing');
   }
 
@@ -286,6 +291,8 @@ export class Race implements RewardTarget {
     const h = window.innerHeight;
     this.deps.renderer.setSize(w, h, false);
     this.cameraRig.setAspect(w / h);
+    // Portrait on a phone: the rotate-device overlay covers the screen, so stop the race underneath it
+    if (this.touch && h > w && this.phase !== 'done') this.setPaused(true);
   }
 
   private exit(action: 'again' | 'menu'): void {
@@ -297,7 +304,7 @@ export class Race implements RewardTarget {
     this.disposed = true;
     this.deps.audio.stopRaceSounds();
     this.keyboard.detach();
-    this.wheel.detach();
+    this.touch?.dispose();
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.cardUI.dispose();
@@ -310,7 +317,6 @@ export class Race implements RewardTarget {
     this.oil.dispose();
     this.particles.dispose();
     this.world.dispose();
-    this.deps.canvas.style.cursor = '';
   }
 
   render(): void {
@@ -462,9 +468,13 @@ export class Race implements RewardTarget {
 
   private readPlayerInput(out: CarInput, racing: boolean): void {
     const k = this.keyboard;
-    out.throttle = racing && k.isDown('KeyW') ? 1 : 0;
-    out.brake = racing && k.isDown('KeyS') ? 1 : 0;
+    const t = this.touch;
+    const left = k.isDown('KeyA') || k.isDown('ArrowLeft') || (t?.left ?? false);
+    const right = k.isDown('KeyD') || k.isDown('ArrowRight') || (t?.right ?? false);
+    out.throttle = racing && (k.isDown('KeyW') || k.isDown('ArrowUp') || (t?.gas ?? false)) ? 1 : 0;
+    out.brake = racing && (k.isDown('KeyS') || k.isDown('ArrowDown') || (t?.brake ?? false)) ? 1 : 0;
     out.handbrake = racing && k.isDown('Space');
+    this.wheel.direction = (right ? 1 : 0) - (left ? 1 : 0);
     out.steer = this.wheel.value;
   }
 
@@ -545,7 +555,7 @@ export class Race implements RewardTarget {
     this.phase = 'done';
     this.player.state.speedScale = 0.6;
     this.wheel.release();
-    this.wheel.enabled = false;
+    this.touch?.setEnabled(false);
     this.cardUI.setEnabled(false);
     this.deps.audio.finish();
     this.hud.setHint(null);
@@ -656,7 +666,7 @@ export class Race implements RewardTarget {
     }
 
     // Stuck hint
-    if (p.stuckTimer > GAME.stuckHintSeconds && this.phase === 'racing') this.hud.setHint('Stuck? Press R to reset the car');
+    if (p.stuckTimer > GAME.stuckHintSeconds && this.phase === 'racing') this.hud.setHint(this.touch ? 'Stuck? Tap \u21BA to reset the car' : 'Stuck? Press R to reset the car');
     else this.hud.setHint(null);
   }
 
@@ -795,8 +805,6 @@ export class Race implements RewardTarget {
     cam.updateMatrixWorld(true);
     cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
 
-    this.wheel.refreshProjection();
-
     // Card table + window drop line follow the 3D console
     this.cabin.tableLeftEdge.getWorldPosition(this.tmpV);
     this.projectToClient(this.tmpV);
@@ -806,10 +814,6 @@ export class Race implements RewardTarget {
     this.projectToClient(this.tmpV);
     const span = Math.hypot(this.proj.x - lx, this.proj.y - ly);
     this.cardUI.setAnchor((lx + this.proj.x) / 2, (ly + this.proj.y) / 2, span / TABLE_DOM.width);
-
-    this.cabin.dashEdge.getWorldPosition(this.tmpV);
-    this.projectToClient(this.tmpV);
-    this.dropLineY = clamp(this.proj.y, window.innerHeight * 0.3, window.innerHeight * 0.7);
 
     this.world.followShadow(p.x, p.z);
     cam.getWorldPosition(this.tmpV);
