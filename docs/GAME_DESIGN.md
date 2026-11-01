@@ -7,9 +7,36 @@ glance down at the cards without leaving the road. That tension is the core of t
 
 ## 1. Scope of this version
 
-In: main menu, starting a race, the core gameplay loop, finish screen.
+In: main menu (singleplayer / online), starting a race, the core gameplay loop, finish screen, online rooms for up to 6.
 Out (not yet): garage, car upgrades, shop, roguelike layers. Systems are kept decoupled and data-driven so these can
 be added later (car stats in a `CarStats` object, rewards in a config table, AI card use possible later).
+
+### Online mode
+
+- Menu has **Singleplayer** and **Online** and a pilot-name field (saved in localStorage, max 14 chars).
+- Rooms: the host's PeerJS id is `pokerracer-<CODE>` (5 chars, unambiguous alphabet), so the code *is* the address.
+  Joining via `?room=CODE` (the "Copy invite link" button) opens the join screen with the code prefilled.
+  Star topology: clients connect to the host only, the host relays messages. Max 6 humans; late joiners are rejected
+  while a race is running.
+- Start: only the host can start. With fewer than 6 players the lobby asks "Fill the N empty slots with AI?" (Yes = AI
+  drivers take the free grid slots, No = humans only, which needs at least 2 players). The roster/grid order is shuffled
+  by the host and sent with a shared track seed. Every client builds the race, reports `ready`, and the host sends `go`
+  (or after a timeout) so the 3-2-1 countdown starts together.
+- Simulation: **client-authoritative per car**. Each player simulates their own car at 120 Hz and broadcasts a snapshot
+  (position, heading, velocities, race progress, finish time, flags) 20 times/s. Remote cars are drawn 110 ms in the past
+  with snapshot interpolation (`net/RemoteCar.ts`), extrapolating briefly when packets are late. The **host simulates the
+  AI cars** and streams them like any other car. Rubber banding uses the average human progress.
+- Collisions: each client resolves contacts between its own car and others locally (remote cars are not pushed
+  authoritatively); crash penalties apply to the local player only.
+- Cards stay private: every player has their own shuffled deck, card boxes sit at the same places for everyone (seeded)
+  but are collected individually. Effects on others are messages: the **Straight oil** drops patches everybody else
+  slips on (your own oil never hurts you), **slow rivals** slows every other human and the AI.
+- The race never pauses online: Esc opens a "MENU" overlay (resume / leave room) while the car keeps driving.
+  Finishing shows the standings, which keep updating as the others finish; "Back to lobby" returns to the room,
+  "Leave room" closes the connection. A player who disconnects is removed from the race; if the host leaves, the room closes
+  and everybody returns to the main menu with a notice.
+- Known limits: no host migration, no reconnect, no anti-cheat (the clients are trusted), WebRTC may fail behind strict
+  NATs (PeerJS' default config includes STUN and a free TURN relay).
 
 ## 2. Tech stack
 

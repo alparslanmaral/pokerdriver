@@ -1,6 +1,8 @@
 import { PAYOUT_DEFAULT, PAYOUTS } from '../config/gameConfig';
 import { isTouchDevice } from '../core/device';
 import { pwa, InstallMode } from '../pwa/pwa';
+import { NET } from '../config/netConfig';
+import { SaveData } from '../core/save';
 import { el, formatMoney, ordinal } from './dom';
 
 export function payoutFor(position: number): number {
@@ -13,8 +15,10 @@ export class MenuScreen {
   private moneyEl: HTMLElement;
   private installBtn: HTMLButtonElement;
   private installNote: HTMLElement;
+  private noticeEl: HTMLElement;
+  private nameInput: HTMLInputElement;
 
-  constructor(parent: HTMLElement, onStart: () => void) {
+  constructor(parent: HTMLElement, hooks: { onSingle: () => void; onOnline: () => void }) {
     this.root = el('div', 'screen menu', parent);
     const panel = el('div', 'panel menu-panel', this.root);
     const suits = el('div', 'menu-suits', panel);
@@ -26,8 +30,27 @@ export class MenuScreen {
     el('span', 'label', moneyRow, 'BANK');
     this.moneyEl = el('span', 'value', moneyRow, '$0');
 
-    const start = el('button', 'btn primary big', panel, 'Start Race');
-    start.addEventListener('click', onStart);
+    this.noticeEl = el('div', 'menu-notice', panel);
+    this.noticeEl.style.display = 'none';
+
+    const nameRow = el('label', 'menu-name', panel);
+    el('span', 'label', nameRow, 'PILOT NAME');
+    this.nameInput = el('input', '', nameRow);
+    this.nameInput.type = 'text';
+    this.nameInput.maxLength = NET.nameMaxLength;
+    this.nameInput.placeholder = 'Racer';
+    this.nameInput.autocomplete = 'off';
+    this.nameInput.spellcheck = false;
+    this.nameInput.value = SaveData.name;
+    this.nameInput.addEventListener('input', () => SaveData.setName(this.nameInput.value));
+    // Typing a name must not trigger the game's keyboard shortcuts
+    this.nameInput.addEventListener('keydown', (e) => e.stopPropagation());
+
+    const modes = el('div', 'menu-modes', panel);
+    const single = el('button', 'btn primary big', modes, 'Singleplayer');
+    single.addEventListener('click', hooks.onSingle);
+    const online = el('button', 'btn big online', modes, 'Online');
+    online.addEventListener('click', hooks.onOnline);
 
     this.installBtn = el('button', 'btn install', panel);
     this.installBtn.addEventListener('click', () => this.onInstallClick());
@@ -95,6 +118,17 @@ export class MenuScreen {
     this.installNote.style.display = '';
   }
 
+  /** Display name for online play (empty = default). */
+  get playerName(): string {
+    return this.nameInput.value.trim();
+  }
+
+  /** One-line message above the buttons (e.g. "The host left the room"). */
+  setNotice(text: string | null): void {
+    this.noticeEl.textContent = text ?? '';
+    this.noticeEl.style.display = text ? '' : 'none';
+  }
+
   setMoney(amount: number): void {
     this.moneyEl.textContent = formatMoney(amount);
   }
@@ -107,13 +141,14 @@ export class MenuScreen {
 export class PauseOverlay {
   readonly root: HTMLElement;
 
-  constructor(parent: HTMLElement, onResume: () => void, onQuit: () => void) {
+  constructor(parent: HTMLElement, onResume: () => void, onQuit: () => void, online = false) {
     this.root = el('div', 'screen pause', parent);
     this.root.style.display = 'none';
     const panel = el('div', 'panel', this.root);
-    el('h2', '', panel, 'PAUSED');
+    el('h2', '', panel, online ? 'MENU' : 'PAUSED');
+    if (online) el('p', 'pause-note', panel, 'The race keeps running for the other players.');
     const resume = el('button', 'btn primary', panel, 'Resume');
-    const quit = el('button', 'btn', panel, 'Quit to menu');
+    const quit = el('button', 'btn', panel, online ? 'Leave room' : 'Quit to menu');
     resume.addEventListener('click', onResume);
     quit.addEventListener('click', onQuit);
   }
@@ -139,7 +174,7 @@ export class FinishScreen {
     this.root.style.display = 'none';
   }
 
-  show(position: number, payout: number, bank: number, rows: FinishRow[], onAgain: () => void, onMenu: () => void): void {
+  show(position: number, payout: number, bank: number, rows: FinishRow[], onAgain: () => void, onMenu: () => void, againLabel = 'Race again', menuLabel = 'Main menu'): void {
     this.root.innerHTML = '';
     this.root.style.display = '';
     const panel = el('div', 'panel finish-panel', this.root);
@@ -163,8 +198,8 @@ export class FinishScreen {
     });
 
     const buttons = el('div', 'btn-row', panel);
-    const again = el('button', 'btn primary', buttons, 'Race again');
-    const menu = el('button', 'btn', buttons, 'Main menu');
+    const again = el('button', 'btn primary', buttons, againLabel);
+    const menu = el('button', 'btn', buttons, menuLabel);
     again.addEventListener('click', onAgain);
     menu.addEventListener('click', onMenu);
   }

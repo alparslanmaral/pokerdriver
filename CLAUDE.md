@@ -26,9 +26,11 @@ rewards with the mouse / finger while driving. Installable as a PWA. Full spec a
   (`RewardTarget` interface; rewards are data in `config/rewards.ts`).
 - `scene/` - `World` (sky, fog, lights, track, scenery), `TrackMesh`, `Scenery`, `Cabin`, `CameraRig`, `CarMesh`,
   `Sky`, `textures` (canvas textures), `dispose`.
+- `net/` - online mode (PeerJS/WebRTC): `NetSession` (room, lobby, relay, ready/go handshake), `RemoteCar`
+  (snapshot interpolation), `protocol.ts` (wire types). Tunables in `config/netConfig.ts`.
 - `fx/` - `Particles`, `OilSlicks`, `CardBoxes`.
 - `ui/` - DOM UI: `HUD`, `screens` (menu/pause/finish), `CardTableUI` (tap select, double-tap discard, animations),
-  `TouchControls` (on-screen drive buttons), `dom` helpers.
+  `TouchControls` (on-screen drive buttons), `OnlineScreen` (create/join/lobby/AI question), `dom` helpers.
   Styles in `src/style.css`.
 - `pwa/` - `pwa.ts` (service worker registration + install prompt). Manifest/icons in `public/`, SW template in
   `scripts/sw.template.js` (built into `sw.js` by the plugin in `vite.config.ts`).
@@ -52,4 +54,4 @@ rewards with the mouse / finger while driving. Installable as a PWA. Full spec a
   because `Car.ts`, `Track.ts`, `PokerEval.ts` have no DOM dependency.
 
 ## Not built yet (planned)
-Garage, car upgrades, shop, roguelike layers, AI card use, music, gamepad support.
+Garage, car upgrades, shop, roguelike layers, AI card use, music, gamepad support, host migration / reconnect online.

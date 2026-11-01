@@ -19,8 +19,9 @@ import { BOXES } from '../config/cardConfig';
 import { CarStats, DEFAULT_CAR_STATS, makeRivalStats, PHYSICS } from '../config/carStats';
 import { TABLE_DOM } from '../config/cabinConfig';
 import { HAND_ORDER, HAND_REWARDS, describeReward } from '../config/rewards';
-import { AI_CONFIG, EFFECTS, GAME, MIRROR, PLAYER_COLOR, RIVALS } from '../config/gameConfig';
+import { AI_CONFIG, EFFECTS, GAME, MIRROR, PLAYER_COLOR, PLAYER_COLORS, RIVALS } from '../config/gameConfig';
 import { AudioEngine } from '../core/audio';
+import { NET } from '../config/netConfig';
 import { isTouchDevice } from '../core/device';
 import { Keyboard } from '../core/input';
 import { clamp, wrapAngle } from '../core/math';
@@ -37,6 +38,9 @@ import { CardTableUI } from '../ui/CardTableUI';
 import { HUD, MinimapDot, NameTag } from '../ui/HUD';
 import { TouchControls } from '../ui/TouchControls';
 import { FinishRow, FinishScreen, PauseOverlay, payoutFor } from '../ui/screens';
+import { NetSession } from '../net/NetSession';
+import { CarSnap, FLAG, FxMsg, StartInfo } from '../net/protocol';
+import { RemoteCar } from '../net/RemoteCar';
 import { Track, TrackLocation, newLocation, newTrackPoint } from '../track/Track';
 
 type Phase = 'countdown' | 'racing' | 'done';
@@ -52,6 +56,8 @@ interface Racer {
   loc: TrackLocation;
   prev: { x: number; z: number; heading: number };
   ai: AIDriver | null;
+  /** Online: a car simulated by another peer, driven from network snapshots. */
+  remote: RemoteCar | null;
   mesh: CarMesh | null;
   total: number;
   prevS: number;
@@ -68,8 +74,10 @@ export interface RaceDeps {
   canvas: HTMLCanvasElement;
   uiRoot: HTMLElement;
   audio: AudioEngine;
-  /** Called when the player leaves the race. */
-  onExit: (action: 'again' | 'menu') => void;
+  /** Online race setup (absent in singleplayer). */
+  online?: { session: NetSession; info: StartInfo };
+  /** Called when the player leaves the race. 'lobby' = back to the online room. */
+  onExit: (action: 'again' | 'menu' | 'lobby') => void;
 }
 
 const STEP = 1 / GAME.physicsHz;
@@ -96,7 +104,10 @@ export class Race implements RewardTarget {
   private readonly pauseUI: PauseOverlay;
   private readonly finishUI: FinishScreen;
   private readonly particles = new Particles();
+  /** Oil dropped by this player: only slows the AI cars simulated here. */
   private readonly oil = new OilSlicks();
+  /** Oil dropped by other online players: slows the local player (and AI on the host) too. */
+  private readonly oilOthers = new OilSlicks();
   private readonly boxes: CardBoxes;
   private readonly racers: Racer[] = [];
   readonly player: Racer;
@@ -111,6 +122,15 @@ export class Race implements RewardTarget {
   private finishShownAt = -1;
   private finishPending = false;
   private disposed = false;
+
+  // Online
+  private readonly net: NetSession | null;
+  private readonly netOff: Array<() => void> = [];
+  private readonly mySlot: number;
+  private netSendTimer = 0;
+  private menuOpen = false;
+  private finishRender: (() => void) | null = null;
+  private finishedSeen = 0;
 
   // Player effect state
   private dropOilTime = 0;
@@ -127,11 +147,13 @@ export class Race implements RewardTarget {
   private readonly pt = newTrackPoint();
   private readonly onResize = (): void => this.resize();
   private readonly onVisibility = (): void => {
-    if (document.hidden && this.phase !== 'done') this.setPaused(true);
+    if (!this.net && document.hidden && this.phase !== 'done') this.setPaused(true);
   };
 
   constructor(private readonly deps: RaceDeps) {
-    const seed = randomSeed();
+    this.net = deps.online?.session ?? null;
+    this.mySlot = deps.online ? deps.online.info.roster.findIndex((e) => e.pid === deps.online!.session.myId) : -1;
+    const seed = deps.online ? deps.online.info.seed : randomSeed();
     this.rng = new Rng(seed ^ 0xa5a5a5a5);
     this.world = new World(seed);
     this.track = this.world.track;
@@ -154,9 +176,10 @@ export class Race implements RewardTarget {
     this.cabin.root.add(this.cameraRig.camera);
 
     // ---- Cards
-    this.cards = new CardSystem(this.rng);
-    this.boxes = new CardBoxes(this.track, this.rng);
-    this.world.scene.add(this.boxes.group, this.oil.mesh, this.particles.points);
+    // Every player gets a different deck, but the card boxes sit at the same places for everybody (seeded by the race).
+    this.cards = new CardSystem(new Rng(randomSeed()));
+    this.boxes = new CardBoxes(this.track, new Rng(seed ^ 0x5bd1e995));
+    this.world.scene.add(this.boxes.group, this.oil.mesh, this.oilOthers.mesh, this.particles.points);
 
     // ---- UI
     this.hud = new HUD(deps.uiRoot);
@@ -170,12 +193,13 @@ export class Race implements RewardTarget {
       deps.uiRoot,
       () => this.setPaused(false),
       () => this.exit('menu'),
+      this.net !== null,
     );
     this.finishUI = new FinishScreen(deps.uiRoot);
     this.touch = isTouchDevice()
       ? new TouchControls(deps.uiRoot, {
           onPause: () => {
-            if (this.phase !== 'done') this.setPaused(!this.paused);
+            if (this.phase !== 'done') this.setPaused(!this.menuShown);
           },
           onReset: () => this.resetPlayer(),
         })
@@ -187,7 +211,7 @@ export class Race implements RewardTarget {
     // ---- Input hooks
     this.keyboard.attach();
     this.keyboard.onPress('Escape', () => {
-      if (this.phase !== 'done') this.setPaused(!this.paused);
+      if (this.phase !== 'done') this.setPaused(!this.menuShown);
     });
     this.keyboard.onPress('KeyR', () => this.resetPlayer());
     this.keyboard.onPress('KeyM', () => {
@@ -204,14 +228,19 @@ export class Race implements RewardTarget {
 
     this.resize();
     this.updateVisuals(0, 1);
+
+    if (this.net) this.setupNet(this.net);
   }
 
   // ------------------------------------------------------------------ setup
 
   private createRacers(): Racer {
     const L = this.track.length;
+    const online = this.deps.online;
+    const roster = online?.info.roster ?? null;
+    const count = roster ? roster.length : GAME.rivalCount + 1;
     const slots: Array<{ s: number; lat: number }> = [];
-    for (let i = 0; i < GAME.rivalCount + 1; i++) {
+    for (let i = 0; i < count; i++) {
       const row = Math.floor(i / 2);
       slots.push({ s: L - 10 - row * 11, lat: i % 2 === 0 ? -3.6 : 3.6 });
     }
@@ -225,7 +254,10 @@ export class Race implements RewardTarget {
     let rivalIdx = 0;
     let player!: Racer;
     for (let i = 0; i < slots.length; i++) {
-      const isPlayer = i === GAME.playerGridSlot;
+      const entry = roster?.[i] ?? null;
+      const isPlayer = entry ? i === this.mySlot : i === GAME.playerGridSlot;
+      // Online: humans are simulated by their own client, AI cars by the host
+      const isRemote = entry !== null && !isPlayer && (!entry.ai || !online!.session.isHost);
       const slot = slots[i];
       const state = createCarState();
       this.track.pointAt(slot.s, slot.lat, this.pt);
@@ -240,15 +272,16 @@ export class Race implements RewardTarget {
       const skill = isPlayer ? 1 : skills[rivalIdx];
       const racer: Racer = {
         id: i,
-        name: rival ? rival.name : 'You',
-        color: rival ? rival.color : PLAYER_COLOR,
+        name: entry ? entry.name : rival ? rival.name : 'You',
+        color: entry ? PLAYER_COLORS[i % PLAYER_COLORS.length] : rival ? rival.color : PLAYER_COLOR,
         isPlayer,
         state,
-        stats: isPlayer ? DEFAULT_CAR_STATS : makeRivalStats(skill),
+        stats: isPlayer || isRemote ? DEFAULT_CAR_STATS : makeRivalStats(skill),
         input: neutralInput(),
         loc,
         prev: { x: state.x, z: state.z, heading: state.heading },
-        ai: isPlayer ? null : new AIDriver(lanes[rivalIdx], skill, (i + 1) * 7919),
+        ai: isPlayer || isRemote ? null : new AIDriver(lanes[rivalIdx], skill, (i + 1) * 7919),
+        remote: isRemote ? new RemoteCar() : null,
         mesh: null,
         total: slot.s - L,
         prevS: loc.s,
@@ -277,8 +310,21 @@ export class Race implements RewardTarget {
     return this.paused;
   }
 
+  /** Whether the pause / room menu overlay is open. */
+  get menuShown(): boolean {
+    return this.net ? this.menuOpen : this.paused;
+  }
+
   setPaused(p: boolean): void {
-    if (this.paused === p || this.disposed) return;
+    if (this.disposed) return;
+    // Online the race never stops for the others: the overlay only offers resume / leave
+    if (this.net) {
+      if (this.menuOpen === p) return;
+      this.menuOpen = p;
+      this.pauseUI.show(p);
+      return;
+    }
+    if (this.paused === p) return;
     this.paused = p;
     this.pauseUI.show(p);
     this.wheel.release();
@@ -292,10 +338,10 @@ export class Race implements RewardTarget {
     this.deps.renderer.setSize(w, h, false);
     this.cameraRig.setAspect(w / h);
     // Portrait on a phone: the rotate-device overlay covers the screen, so stop the race underneath it
-    if (this.touch && h > w && this.phase !== 'done') this.setPaused(true);
+    if (this.touch && !this.net && h > w && this.phase !== 'done') this.setPaused(true);
   }
 
-  private exit(action: 'again' | 'menu'): void {
+  private exit(action: 'again' | 'menu' | 'lobby'): void {
     this.deps.onExit(action);
   }
 
@@ -305,6 +351,7 @@ export class Race implements RewardTarget {
     this.deps.audio.stopRaceSounds();
     this.keyboard.detach();
     this.touch?.dispose();
+    for (const off of this.netOff) off();
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.cardUI.dispose();
@@ -315,6 +362,7 @@ export class Race implements RewardTarget {
     this.mirrorTarget.dispose();
     this.boxes.dispose();
     this.oil.dispose();
+    this.oilOthers.dispose();
     this.particles.dispose();
     this.world.dispose();
   }
@@ -361,6 +409,7 @@ export class Race implements RewardTarget {
     this.updateVisuals(this.paused ? 0 : dt, alpha);
     this.boxes.update(this.paused ? 0 : dt);
     this.oil.update(this.clock);
+    this.oilOthers.update(this.clock);
     this.particles.update(this.paused ? 0 : dt);
     this.updateHud();
     this.updateAudio();
@@ -369,6 +418,9 @@ export class Race implements RewardTarget {
   // ------------------------------------------------------------------ simulation step
 
   private step(dt: number): void {
+    // Online: hold everybody on the grid until all players finished loading
+    if (this.net && !this.net.hasGone) return;
+
     // Countdown: a short intro, then 3-2-1-GO
     if (this.phase === 'countdown') {
       this.countdownTimer -= dt;
@@ -391,7 +443,7 @@ export class Race implements RewardTarget {
     }
 
     const racing = this.phase !== 'countdown';
-    const playerTotal = this.player.total;
+    const playerTotal = this.rubberBandReference();
 
     // Per-racer input + physics
     for (const r of this.racers) {
@@ -402,6 +454,11 @@ export class Race implements RewardTarget {
       this.track.locate(r.state.x, r.state.z, r.loc.index, r.loc);
       r.state.offTrack = Math.abs(r.loc.lateral) > this.track.halfWidth + 0.6;
       r.oilCooldown = Math.max(0, r.oilCooldown - dt);
+
+      if (r.remote) {
+        this.stepRemote(r);
+        continue;
+      }
 
       if (r.isPlayer && !r.finished) {
         this.readPlayerInput(r.input, racing);
@@ -434,6 +491,7 @@ export class Race implements RewardTarget {
       for (let j = i + 1; j < this.racers.length; j++) {
         const a = this.racers[i];
         const b = this.racers[j];
+        if (a.remote && b.remote) continue;
         const hit = resolveCarPair(a.state, b.state, a.stats);
         if (hit) {
           if (a.isPlayer) this.onImpact(a, hit);
@@ -445,6 +503,15 @@ export class Race implements RewardTarget {
 
     this.updateEffects(dt);
     this.updateRanks();
+
+    if (this.net) {
+      this.netSendTimer -= dt;
+      if (this.netSendTimer <= 0) {
+        this.netSendTimer += 1 / NET.sendHz;
+        this.sendSnapshot();
+      }
+      this.refreshOnlineFinish();
+    }
 
     if (this.player.finished && this.finishShownAt < 0) {
       this.finishShownAt = this.clock;
@@ -464,6 +531,24 @@ export class Race implements RewardTarget {
       this.finishCruisers.set(r.id, ai);
     }
     return ai;
+  }
+
+  /** Progress the AI rubber-bands against: the player offline, the average of all human drivers online. */
+  private rubberBandReference(): number {
+    if (!this.net) return this.player.total;
+    let sum = 0;
+    let n = 0;
+    for (const r of this.racers) {
+      if (!this.isHuman(r)) continue;
+      sum += r.total;
+      n++;
+    }
+    return n > 0 ? sum / n : this.player.total;
+  }
+
+  private isHuman(r: Racer): boolean {
+    const roster = this.deps.online?.info.roster;
+    return roster ? !roster[r.id].ai : r.isPlayer;
   }
 
   private readPlayerInput(out: CarInput, racing: boolean): void {
@@ -571,6 +656,84 @@ export class Race implements RewardTarget {
     sorted.forEach((r, i) => (r.rank = i + 1));
   }
 
+  // ------------------------------------------------------------------ online
+
+  private setupNet(net: NetSession): void {
+    this.netOff.push(
+      net.events.on('snap', (ts, cars) => {
+        const now = performance.now();
+        for (const c of cars) this.racers.find((r) => r.id === c[0])?.remote?.push(ts, now, c);
+      }),
+      net.events.on('fx', (fx) => this.onNetFx(fx)),
+      net.events.on('left', (slot) => this.onRacerLeft(slot)),
+    );
+    if (!net.hasGone) this.hud.toast('Waiting for the other players...', 'info', NET.readyTimeoutMs);
+    net.markReady();
+  }
+
+  /** Move a remote car to its interpolated network pose. */
+  private stepRemote(r: Racer): void {
+    const remote = r.remote!;
+    if (!remote.hasData) return;
+    remote.sample(performance.now(), r.state);
+    this.track.locate(r.state.x, r.state.z, r.loc.index, r.loc);
+    r.state.offTrack = Math.abs(r.loc.lateral) > this.track.halfWidth + 0.6;
+    r.total = remote.total;
+    if (!r.finished && remote.finishTime >= 0) {
+      r.finished = true;
+      r.finishTime = remote.finishTime;
+    }
+  }
+
+  /** Broadcast every car this peer simulates: the player, plus the AI cars when hosting. */
+  private sendSnapshot(): void {
+    const r2 = (v: number): number => Math.round(v * 100) / 100;
+    const cars: CarSnap[] = [];
+    for (const r of this.racers) {
+      if (r.remote) continue;
+      const s = r.state;
+      const flags = (s.drifting ? FLAG.drifting : 0) | (s.nitroTime > 0 ? FLAG.nitro : 0) | (s.shieldTime > 0 ? FLAG.shield : 0);
+      cars.push([r.id, r2(s.x), r2(s.z), Math.round(s.heading * 1000) / 1000, r2(s.vLong), r2(s.vLat), r2(s.yawRate), r2(r.total), r.finished ? r2(r.finishTime) : -1, flags]);
+    }
+    this.net?.sendSnap(cars);
+  }
+
+  private onNetFx(fx: FxMsg): void {
+    if (fx.k === 'oil') {
+      this.oilOthers.spawn(fx.x, fx.z, this.clock);
+      return;
+    }
+    if (fx.from === this.mySlot) return;
+    const slow = (r: Racer): void => {
+      r.state.slowFactor = 1 - fx.factor;
+      r.state.slowTime = Math.max(r.state.slowTime, fx.seconds);
+    };
+    slow(this.player);
+    // The host simulates the AI cars, which are rivals of every human
+    if (this.net?.isHost) for (const r of this.racers) if (r.ai) slow(r);
+    const who = this.racers.find((r) => r.id === fx.from)?.name ?? 'A rival';
+    this.hud.toast(`${who} slowed you down!`, 'bad', 1600);
+  }
+
+  private onRacerLeft(slot: number): void {
+    const i = this.racers.findIndex((r) => r.id === slot);
+    if (i < 0) return;
+    const r = this.racers[i];
+    if (r.mesh) this.world.scene.remove(r.mesh.root);
+    this.racers.splice(i, 1);
+    this.hud.toast(`${r.name} left the race`, 'info', 1800);
+  }
+
+  /** Keep the open finish screen's standings current while the others cross the line. */
+  private refreshOnlineFinish(): void {
+    if (!this.finishRender) return;
+    let n = 0;
+    for (const r of this.racers) if (r.finished) n++;
+    if (n === this.finishedSeen) return;
+    this.finishedSeen = n;
+    this.finishRender();
+  }
+
   // ------------------------------------------------------------------ impacts + effects
 
   private onImpact(r: Racer, hit: ImpactInfo): void {
@@ -637,14 +800,17 @@ export class Race implements RewardTarget {
         const bx = p.state.x - forwardX(p.state.heading) * 2.6;
         const bz = p.state.z - forwardZ(p.state.heading) * 2.6;
         this.oil.spawn(bx, bz, this.clock);
+        this.net?.sendFx({ k: 'oil', x: bx, z: bz, from: this.mySlot });
       }
     }
     if (this.slowRivalsTime > 0) this.slowRivalsTime = Math.max(0, this.slowRivalsTime - dt);
 
     // Rivals touching oil
     for (const r of this.racers) {
-      if (r.isPlayer || r.oilCooldown > 0) continue;
-      if (this.oil.hits(r.state.x, r.state.z, 0.9)) {
+      if (r.remote || r.oilCooldown > 0) continue;
+      // Your own oil never hurts you; oil from other online players does
+      const slipped = this.oilOthers.hits(r.state.x, r.state.z, 0.9) || (!r.isPlayer && this.oil.hits(r.state.x, r.state.z, 0.9));
+      if (slipped) {
         r.oilCooldown = EFFECTS.oilCooldownPerCar;
         r.state.vLong *= EFFECTS.oilSpeedFactor;
         r.state.oilTime = EFFECTS.oilSlipSeconds;
@@ -652,7 +818,8 @@ export class Race implements RewardTarget {
         for (let i = 0; i < 6; i++) {
           this.particles.emit(r.state.x, 0.3, r.state.z, (Math.random() - 0.5) * 4, 1 + Math.random() * 2, (Math.random() - 0.5) * 4, 0x15131c, 0.5, 0.6, { gravity: 4, grow: 1 });
         }
-        if (this.clock - this.oilToastTime > 1.5) {
+        if (r.isPlayer) this.hud.toast('You slipped on oil!', 'bad', 1400);
+        else if (this.clock - this.oilToastTime > 1.5) {
           this.oilToastTime = this.clock;
           this.hud.toast(`${r.name} slipped on your oil!`, 'good', 1400);
         }
@@ -728,8 +895,9 @@ export class Race implements RewardTarget {
 
   slowRivals(factor: number, seconds: number): void {
     this.slowRivalsTime = Math.max(this.slowRivalsTime, seconds);
+    this.net?.sendFx({ k: 'slow', factor, seconds, from: this.mySlot });
     for (const r of this.racers) {
-      if (r.isPlayer) continue;
+      if (r.isPlayer || r.remote) continue;
       r.state.slowFactor = 1 - factor;
       r.state.slowTime = Math.max(r.state.slowTime, seconds);
     }
@@ -754,17 +922,26 @@ export class Race implements RewardTarget {
     const position = this.player.rank;
     const payout = payoutFor(position);
     const bank = SaveData.addMoney(payout);
-    const rows: FinishRow[] = [...this.racers]
-      .sort((a, b) => a.rank - b.rank)
-      .map((r) => ({ name: r.name, color: r.color, isPlayer: r.isPlayer, time: r.finished ? r.finishTime : null }));
-    this.finishUI.show(
-      position,
-      payout,
-      bank,
-      rows,
-      () => this.exit('again'),
-      () => this.exit('menu'),
-    );
+    const render = (): void => {
+      const rows: FinishRow[] = [...this.racers]
+        .sort((a, b) => a.rank - b.rank)
+        .map((r) => ({ name: r.name, color: r.color, isPlayer: r.isPlayer, time: r.finished ? r.finishTime : null }));
+      this.finishUI.show(
+        position,
+        payout,
+        bank,
+        rows,
+        () => this.exit(this.net ? 'lobby' : 'again'),
+        () => this.exit('menu'),
+        this.net ? 'Back to lobby' : undefined,
+        this.net ? 'Leave room' : undefined,
+      );
+    };
+    render();
+    if (this.net) {
+      this.finishRender = render;
+      this.finishedSeen = this.racers.filter((r) => r.finished).length;
+    }
   }
 
   // ------------------------------------------------------------------ visuals / HUD / audio

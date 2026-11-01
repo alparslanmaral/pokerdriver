@@ -20,6 +20,14 @@ npm run build    # type check + production build into dist/
   to throw one out. Portrait shows a "rotate your device" screen.
 - Drive through floating card boxes to draw cards. Hard crashes knock a card off your table.
 
+## Online mode (up to 6 players)
+
+Main menu -> **Online**. Type a pilot name, then **Create room** (you get a 5-letter room code and an invite link) or
+**Join** with a friend's code. Matchmaking uses WebRTC through [PeerJS](https://peerjs.com); the free PeerJS cloud
+signaling server is used by default (override with `?peerhost=HOST&peerport=9000&peersecure=0` to use your own
+`peerjs-server`). When the host starts a race with fewer than 6 players, the game asks whether the empty slots should be
+filled with AI drivers.
+
 ## Install as an app (PWA)
 
 The production build ships a web manifest and a service worker, so the game works offline once loaded and can be

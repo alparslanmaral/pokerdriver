@@ -37,6 +37,9 @@ export const RIVALS: readonly { name: string; color: number }[] = [
 
 export const PLAYER_COLOR = 0xe4572e;
 
+/** Car colors by grid slot in online races (everybody sees the same color for the same slot). */
+export const PLAYER_COLORS: readonly number[] = [PLAYER_COLOR, ...RIVALS.map((r) => r.color)];
+
 export const AI_CONFIG = {
   /** Lateral lane offsets (m) handed out to the rivals, shuffled per race. */
   laneOffsets: [-5.2, -3.1, -1.0, 1.0, 3.1, 5.2],
